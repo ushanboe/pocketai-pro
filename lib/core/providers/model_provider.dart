@@ -298,6 +298,37 @@ class ModelProvider extends ChangeNotifier {
               'https://huggingface.co/openbmb/MiniCPM-V-4-gguf/resolve/main/ggml-model-Q4_K_M.gguf',
           filename: 'minicpm-v4-q4_k_m.gguf',
         ),
+        // ── Gemma 4 (LiteRT-LM backend) ──────────────────────────
+        ModelInfo(
+          id: 'gemma-4-e2b-it',
+          name: 'Gemma 4 E2B',
+          sizeBytes: 2600000000,
+          description:
+              'Google\'s latest on-device model. Multimodal (text + vision + audio), 32K context, built-in thinking mode, and tool calling. Smallest Gemma 4 variant.',
+          parameterCount: 'E2B',
+          quantization: 'int4',
+          minRamGB: 8.0,
+          capabilityTag: 'Multimodal',
+          downloadUrl:
+              'https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm',
+          filename: 'gemma-4-E2B-it.litertlm',
+          backendType: InferenceBackendType.litertlm,
+        ),
+        ModelInfo(
+          id: 'gemma-4-e4b-it',
+          name: 'Gemma 4 E4B',
+          sizeBytes: 3700000000,
+          description:
+              'Google\'s most powerful on-device model. Multimodal (text + vision + audio), 32K context, thinking mode, tool calling. Best quality for mobile.',
+          parameterCount: 'E4B',
+          quantization: 'int4',
+          minRamGB: 12.0,
+          capabilityTag: 'Multimodal',
+          downloadUrl:
+              'https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm',
+          filename: 'gemma-4-E4B-it.litertlm',
+          backendType: InferenceBackendType.litertlm,
+        ),
       ];
 
   /// Loads model catalog from SharedPreferences. Falls back to defaultCatalog.
@@ -326,13 +357,14 @@ class ModelProvider extends ChangeNotifier {
         final existingIds = _models.map((m) => m.id).toSet();
         for (int i = 0; i < _models.length; i++) {
           final def = defaultMap[_models[i].id];
-          if (def != null && (_models[i].downloadUrl.isEmpty || _models[i].filename.isEmpty || _models[i].mmprojUrl != def.mmprojUrl)) {
+          if (def != null && (_models[i].downloadUrl.isEmpty || _models[i].filename.isEmpty || _models[i].mmprojUrl != def.mmprojUrl || _models[i].backendType != def.backendType)) {
             _models[i] = _models[i].copyWith(
               downloadUrl: def.downloadUrl.isNotEmpty ? def.downloadUrl : null,
               filename: def.filename.isNotEmpty ? def.filename : null,
               isVision: def.isVision,
               mmprojUrl: def.mmprojUrl.isNotEmpty ? def.mmprojUrl : null,
               mmprojFilename: def.mmprojFilename.isNotEmpty ? def.mmprojFilename : null,
+              backendType: def.backendType,
             );
           }
         }
@@ -499,7 +531,7 @@ class ModelProvider extends ChangeNotifier {
       // Verify downloaded file is valid (not an error page)
       final tempSize = await tempFile.length();
       if (tempSize < 1000000) {
-        // < 1MB is too small for any GGUF model — likely an error page
+        // < 1MB is too small for any model file — likely an error page
         await tempFile.delete();
         _lastError = 'Download incomplete. Please try again.';
         final idx = _models.indexWhere((m) => m.id == modelId);

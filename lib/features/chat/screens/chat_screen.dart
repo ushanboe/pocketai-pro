@@ -17,6 +17,7 @@ import 'package:pocketai/core/models/message.dart';
 import 'package:pocketai/core/providers/conversation_provider.dart';
 import 'package:pocketai/core/providers/settings_provider.dart';
 import 'package:pocketai/core/services/inference_engine.dart';
+import 'package:pocketai/core/models/model_info.dart';
 import 'package:pocketai/core/providers/model_provider.dart';
 import 'package:pocketai/features/chat/widgets/prompt_templates_bottom_sheet.dart';
 
@@ -542,11 +543,16 @@ class ChatScreenState extends State<ChatScreen> with TickerProviderStateMixin {
       );
     }
 
+    // Determine which backend to use based on the active model
+    final activeModel = modelProvider.activeModel;
+    final backendType = activeModel?.backendType ?? InferenceBackendType.fllama;
+
     final stream =
         _inferenceEngine.generateResponse(
           text, _messages, settings, modelPath,
           mmprojPath: mmprojPath,
           imageBytes: imageBytes,
+          backendType: backendType,
         );
     _streamSubscription = stream.listen(
       (token) {

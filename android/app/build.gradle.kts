@@ -26,7 +26,7 @@ android {
         applicationId = "com.appforge.pocketai"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        minSdk = maxOf(flutter.minSdkVersion, 31) // LiteRT-LM requires Android 12+
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -48,4 +48,6 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    // Google LiteRT-LM for Gemma 4 on-device inference
+    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
 }

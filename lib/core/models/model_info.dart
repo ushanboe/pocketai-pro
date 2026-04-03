@@ -1,3 +1,11 @@
+/// Identifies which inference runtime a model uses.
+/// - fllama: llama.cpp via fllama (GGUF models)
+/// - litertlm: Google LiteRT-LM (Gemma 4 .litertlm models)
+enum InferenceBackendType {
+  fllama,
+  litertlm,
+}
+
 class ModelInfo {
   final String id;
   final String name;
@@ -16,6 +24,7 @@ class ModelInfo {
   final bool isVision;
   final String mmprojUrl;
   final String mmprojFilename;
+  final InferenceBackendType backendType;
 
   const ModelInfo({
     required this.id,
@@ -35,6 +44,7 @@ class ModelInfo {
     this.isVision = false,
     this.mmprojUrl = '',
     this.mmprojFilename = '',
+    this.backendType = InferenceBackendType.fllama,
   });
 
   /// Returns a human-readable file size string.
@@ -81,6 +91,7 @@ class ModelInfo {
     bool? isVision,
     String? mmprojUrl,
     String? mmprojFilename,
+    InferenceBackendType? backendType,
   }) {
     return ModelInfo(
       id: id ?? this.id,
@@ -100,6 +111,7 @@ class ModelInfo {
       isVision: isVision ?? this.isVision,
       mmprojUrl: mmprojUrl ?? this.mmprojUrl,
       mmprojFilename: mmprojFilename ?? this.mmprojFilename,
+      backendType: backendType ?? this.backendType,
     );
   }
 
@@ -122,6 +134,7 @@ class ModelInfo {
       'isVision': isVision,
       'mmprojUrl': mmprojUrl,
       'mmprojFilename': mmprojFilename,
+      'backendType': backendType.name,
     };
   }
 
@@ -146,6 +159,10 @@ class ModelInfo {
       isVision: json['isVision'] as bool? ?? false,
       mmprojUrl: json['mmprojUrl'] as String? ?? '',
       mmprojFilename: json['mmprojFilename'] as String? ?? '',
+      backendType: InferenceBackendType.values.firstWhere(
+        (e) => e.name == (json['backendType'] as String? ?? 'fllama'),
+        orElse: () => InferenceBackendType.fllama,
+      ),
     );
   }
 
