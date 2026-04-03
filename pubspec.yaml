@@ -1,0 +1,39 @@
+name: pocketai
+description: "MyTinyAI — Think big. Run tiny. Offline AI chat assistant powered by on-device LLM inference via fllama (llama.cpp). Privacy-first — no internet required for chat, no accounts, no data leaves your device."
+publish_to: 'none'
+version: 1.13.0+13
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  provider:
+  sqflite:
+  shared_preferences:
+  path:
+  uuid:
+  flutter_animate:
+  share_plus:
+  google_fonts:
+  flutter_markdown:
+  lottie:
+  path_provider:
+  image_picker:
+  flutter_tts:
+  speech_to_text:
+  wakelock_plus:
+  fllama:
+    git:
+      url: https://github.com/Telosnex/fllama.git
+      ref: main
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints:
+
+flutter:
+  uses-material-design: true

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_chat"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_new_chat"
+        android:shortcutLongLabel="@string/shortcut_new_chat_long">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="com.appforge.pocketai"
+            android:targetClass="com.appforge.pocketai.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="hey_tiny"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_hey_tiny"
+        android:shortcutLongLabel="@string/shortcut_hey_tiny_long">
+        <intent
+            android:action="com.appforge.pocketai.VOICE_MODE"
+            android:targetPackage="com.appforge.pocketai"
+            android:targetClass="com.appforge.pocketai.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

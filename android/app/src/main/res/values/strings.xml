@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MyTinyAI</string>
+    <string name="shortcut_new_chat">New Chat</string>
+    <string name="shortcut_new_chat_long">Start a new chat</string>
+    <string name="shortcut_hey_tiny">Hey Tiny</string>
+    <string name="shortcut_hey_tiny_long">Start voice conversation</string>
+    <string name="widget_description">Quick access to MyTinyAI</string>
+    <string name="widget_tap_hint">Tap to chat with Tiny</string>
+</resources>
