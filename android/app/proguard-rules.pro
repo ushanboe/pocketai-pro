@@ -5,3 +5,10 @@
 -dontwarn com.google.mlkit.vision.text.korean.**
 -keep class io.flutter.** { *; }
 -dontwarn io.flutter.embedding.**
+
+# LiteRT-LM (Gemma 4) — keep all SDK classes, JNI, and callbacks
+# Without these rules, R8 strips classes that are only called from native/JNI code,
+# causing ClassNotFoundException crashes at runtime during inference.
+-keep class com.google.ai.edge.litertlm.** { *; }
+-keepclassmembers class com.google.ai.edge.litertlm.** { *; }
+-dontwarn com.google.ai.edge.litertlm.**
