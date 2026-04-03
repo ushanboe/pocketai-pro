@@ -133,15 +133,20 @@ flutter build apk --release
 
 The following issues WILL occur on first build. See [GEMMA4_INTEGRATION.md](GEMMA4_INTEGRATION.md#build-issues--fixes-critical--read-before-building) for detailed fixes.
 
-| # | Error | Cause | Fix |
-|---|-------|-------|-----|
-| 1 | `version solving failed` (SDK >=3.10.0) | Flutter too old | `flutter upgrade` to 3.41+ |
-| 2 | `ld.lld: error: unable to find library -lcpp-httplib` | llama.cpp common links httplib unconditionally | Patch `~/.pub-cache/git/fllama-<hash>/src/llama.cpp/common/CMakeLists.txt` to make httplib conditional |
-| 3 | `Argument type mismatch: Float vs Double` in LiteRtLmPlugin.kt | LiteRT-LM SamplerConfig expects Double | Already fixed in codebase — don't use `.toFloat()` |
-| 4 | Kotlin metadata version warning (2.3.0 vs 2.2.0) | litertlm-android compiled with newer Kotlin | Non-fatal, no runtime impact |
-| 5 | Build appears stuck for 10+ minutes | llama.cpp C++ compilation for 3 ABIs | Normal — wait for it, ~12 min first build |
+| # | Error | Type | Fix |
+|---|-------|------|-----|
+| 1 | `version solving failed` (SDK >=3.10.0) | Build | `flutter upgrade` to 3.41+ |
+| 2 | `ld.lld: error: unable to find library -lcpp-httplib` | Build | Patch `~/.pub-cache/git/fllama-<hash>/src/llama.cpp/common/CMakeLists.txt` — make httplib conditional |
+| 3 | `Argument type mismatch: Float vs Double` in LiteRtLmPlugin.kt | Build | Fixed in code — don't use `.toFloat()` on SamplerConfig params |
+| 4 | Kotlin metadata version warning (2.3.0 vs 2.2.0) | Build | Non-fatal, no runtime impact |
+| 5 | `uses-native-library` found in `<manifest>` | Build | Must go INSIDE `<application>`, not under `<manifest>` — fixed in code |
+| 6 | `INIT_FAILED, Engine is not initialized` | Runtime | Add `libOpenCL.so` + `libvndksupport.so` to manifest + GPU→CPU fallback in plugin |
+| 7 | Build appears stuck for 10+ minutes | Build | Normal — llama.cpp C++ compilation for 3 ABIs, ~12 min first build |
 
-**Note:** Issue #2 (httplib patch) is in the pub cache and may need to be re-applied after `flutter pub get` or `flutter clean`.
+**Notes:**
+- Issue #2 (httplib patch) is in the pub cache and may need to be re-applied after `flutter pub get` or `flutter clean`
+- Issue #6 is the most common runtime failure — always include the manifest GPU libs AND the GPU→CPU fallback
+- See [GEMMA4_INTEGRATION.md](GEMMA4_INTEGRATION.md#build-issues--fixes-critical--read-before-building) for full details with error messages, causes, and code fixes
 
 ## Permissions
 

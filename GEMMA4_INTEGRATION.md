@@ -24,25 +24,26 @@ Gemma 4 uses Google's **LiteRT-LM** runtime with `.litertlm` model files — a c
 
 ## Files Changed / Added
 
-### Modified (4 files)
+### Modified (5 files)
 | File | What changed |
 |------|-------------|
 | `lib/core/models/model_info.dart` | Added `InferenceBackendType` enum + `backendType` field |
 | `lib/core/providers/model_provider.dart` | Added Gemma 4 E2B + E4B to catalog, updated merge logic |
 | `lib/features/chat/screens/chat_screen.dart` | Passes `backendType` to InferenceEngine |
 | `android/app/build.gradle.kts` | Added LiteRT-LM dependency, minSdk=31 |
+| `android/app/src/main/AndroidManifest.xml` | Added GPU native library declarations (`libOpenCL.so`, `libvndksupport.so`) inside `<application>` |
 
 ### New (5 files)
 | File | Purpose |
 |------|---------|
 | `lib/core/services/inference_backend.dart` | Abstract interface all backends implement |
 | `lib/core/services/fllama_backend.dart` | Existing fllama logic extracted into backend interface |
-| `lib/core/services/litertlm_backend.dart` | Dart side — calls Kotlin via MethodChannel/EventChannel |
+| `lib/core/services/litertlm_backend.dart` | Dart side — calls Kotlin via MethodChannel/EventChannel, with init error handling |
 | `lib/core/services/inference_engine.dart` | Rewritten as router that delegates to correct backend |
-| `android/.../LiteRtLmPlugin.kt` | Kotlin bridge to LiteRT-LM SDK |
+| `android/.../LiteRtLmPlugin.kt` | Kotlin bridge to LiteRT-LM SDK with GPU→CPU fallback + logging |
 
-### Unchanged
-- `MainActivity.kt` — just added one line to register the plugin
+### Also modified
+- `MainActivity.kt` — added one line to register LiteRtLmPlugin
 
 ---
 
@@ -133,9 +134,23 @@ Copy `LiteRtLmPlugin.kt` into your `android/app/src/main/kotlin/<package>/` dire
 
 The plugin handles:
 - Engine lifecycle (init, dispose)
-- GPU/CPU backend selection
+- **GPU→CPU automatic fallback** (tries GPU first, retries with CPU if GPU fails)
 - Streaming via Kotlin coroutines + `sendMessageAsync().collect()`
 - Image bytes for multimodal queries
+- Detailed Android logging (`adb logcat | grep LiteRtLm`)
+
+**CRITICAL: GPU fallback pattern.** The `initialize` method MUST try GPU first, then fall back to CPU:
+```kotlin
+try {
+    engine = Engine(EngineConfig(modelPath = path, backend = Backend.GPU(), ...))
+    engine!!.initialize()
+} catch (gpuErr: Exception) {
+    Log.w("LiteRtLm", "GPU failed, falling back to CPU: ${gpuErr.message}")
+    engine = Engine(EngineConfig(modelPath = path, backend = Backend.CPU(), ...))
+    engine!!.initialize()
+}
+```
+Without this, the engine will fail on devices where GPU compute isn't available (common on mid-range phones).
 
 ### Step 7: Register plugin in MainActivity
 
@@ -148,8 +163,9 @@ class MainActivity : FlutterActivity() {
 }
 ```
 
-### Step 8: Update build.gradle.kts
+### Step 8: Update build.gradle.kts and AndroidManifest.xml
 
+**build.gradle.kts:**
 ```kotlin
 android {
     defaultConfig {
@@ -161,6 +177,18 @@ dependencies {
     implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
 }
 ```
+
+**AndroidManifest.xml** — Add GPU library declarations INSIDE `<application>` (not under `<manifest>`):
+```xml
+<application ...>
+    <!-- GPU acceleration for LiteRT-LM. required="false" means CPU fallback works. -->
+    <uses-native-library android:name="libOpenCL.so" android:required="false"/>
+    <uses-native-library android:name="libvndksupport.so" android:required="false"/>
+    ...
+</application>
+```
+
+These are REQUIRED for GPU inference. Without them, the engine init will fail with `INIT_FAILED` on most devices.
 
 ### Step 9: Add Gemma 4 models to your catalog
 
@@ -317,7 +345,85 @@ while maximum supported version is 2.2.0.
 
 ---
 
-### Issue 5: First build takes ~12 minutes
+### Issue 5: `uses-native-library` in wrong XML location
+
+**Error:**
+```
+AAPT: error: unexpected element <uses-native-library> found in <manifest>.
+```
+
+**Cause:** `<uses-native-library>` tags must go INSIDE `<application>`, not directly under `<manifest>`. This is an Android XML structure rule — it's different from `<uses-permission>` which goes under `<manifest>`.
+
+**Fix:** Place GPU library declarations inside `<application>`:
+```xml
+<!-- WRONG — under <manifest> -->
+<manifest>
+    <uses-native-library android:name="libOpenCL.so" android:required="false"/>
+    <application ...>
+
+<!-- CORRECT — inside <application> -->
+<manifest>
+    <application ...>
+        <uses-native-library android:name="libOpenCL.so" android:required="false"/>
+        <uses-native-library android:name="libvndksupport.so" android:required="false"/>
+```
+
+**Already fixed** in the current codebase (commit 6dc7b86).
+
+---
+
+### Issue 6: Runtime — `PlatformException(INIT_FAILED, Engine is not initialized)`
+
+**Error (on device):**
+```
+Generation error: PlatformException(INIT_FAILED, Engine is not initialized., null, null)
+```
+
+**Cause:** The LiteRT-LM engine fails to initialize, usually because:
+1. GPU backend is unavailable on the device (most common)
+2. Model file is corrupted or incomplete
+3. Device doesn't have enough RAM (8 GB min for E2B, 12 GB for E4B)
+
+**Fix (applied in codebase):** Three changes were needed:
+
+**a) AndroidManifest.xml — declare GPU native libraries:**
+```xml
+<application ...>
+    <uses-native-library android:name="libOpenCL.so" android:required="false"/>
+    <uses-native-library android:name="libvndksupport.so" android:required="false"/>
+```
+Without these, the device's GPU compute libraries are not accessible to the app, causing GPU init to fail silently.
+
+**b) LiteRtLmPlugin.kt — GPU→CPU automatic fallback:**
+```kotlin
+// Try GPU first
+try {
+    engine = Engine(EngineConfig(modelPath = modelPath, backend = Backend.GPU(), ...))
+    engine!!.initialize()
+} catch (gpuErr: Exception) {
+    // GPU failed — fall back to CPU
+    engine = Engine(EngineConfig(modelPath = modelPath, backend = Backend.CPU(), ...))
+    engine!!.initialize()
+}
+```
+Without this fallback, GPU failure = total failure. CPU is slower but works on all devices.
+
+**c) litertlm_backend.dart — surface init errors to user:**
+```dart
+try {
+    await _method.invokeMethod('initialize', {...});
+} catch (e) {
+    _streamController?.addError('Gemma 4 engine failed to start: $e');
+    return; // Don't attempt inference with no engine
+}
+```
+Without this, init failure is silent and the user sees a confusing "no response generated" message.
+
+**Debugging:** Use `adb logcat | grep LiteRtLm` to see detailed init logs from the Kotlin plugin.
+
+---
+
+### Issue 7: First build takes ~12 minutes
 
 **Cause:** fllama compiles llama.cpp from C++ source via CMake for 3 Android ABIs (`arm64-v8a`, `x86_64`, `x86`). This is ~200 compilation units per ABI.
 
@@ -326,6 +432,18 @@ while maximum supported version is 2.2.0.
 **Tip:** Don't kill the build if it appears stuck at `Running Gradle task 'assembleRelease'...` — it's compiling C++ in the background. The output doesn't stream until completion.
 
 ---
+
+### Summary of all issues
+
+| # | Error | Type | Severity |
+|---|-------|------|----------|
+| 1 | Flutter SDK version solving failed | Build | Fatal — won't compile |
+| 2 | `cpp-httplib` linker error | Build | Fatal — needs pub cache patch |
+| 3 | Kotlin Float vs Double | Build | Fatal — compile error (fixed in code) |
+| 4 | Kotlin metadata version warning | Build | Non-fatal warning |
+| 5 | `uses-native-library` wrong XML location | Build | Fatal — AAPT error (fixed in code) |
+| 6 | `INIT_FAILED, Engine is not initialized` | Runtime | Fatal — needs manifest + GPU fallback |
+| 7 | First build takes ~12 minutes | Build | Expected behavior |
 
 ### Build Environment (tested & working)
 
@@ -336,19 +454,28 @@ while maximum supported version is 2.2.0.
 | Android SDK | compileSdk from flutter |
 | Android NDK | 28.2.13676358 (auto-installed) |
 | minSdk | 31 (Android 12+) |
-| Kotlin | 2.1.x (via Flutter Gradle plugin) |
+| Kotlin | 2.2.20 (via Flutter Gradle plugin) |
 | CMake | 3.22.1 |
+| LiteRT-LM | latest.release (0.10.0 as of 2026-04-04) |
 | Build time | ~12 min first build, ~2-3 min incremental |
-| APK size | 114.2 MB (includes llama.cpp native libs for 3 ABIs) |
+| APK size | 114.2 MB (includes llama.cpp native libs for 3 ABIs + LiteRT-LM JNI) |
 
 ---
 
 ## Troubleshooting (Runtime)
 
-- **"Engine not initialized"**: The LiteRT-LM engine takes 10-15 seconds to load. Ensure you show a loading indicator.
-- **Crash on older devices**: Requires Android 12+ (API 31). The minSdk bump handles this at install time.
-- **Out of memory**: E2B needs 8GB RAM, E4B needs 12GB. Check device RAM before allowing download.
-- **No response / empty output**: Try `Backend.CPU()` instead of `Backend.GPU()` — some GPUs aren't supported yet.
+- **`PlatformException(INIT_FAILED, Engine is not initialized)`**: Most common error. Check in this order:
+  1. Are `libOpenCL.so` + `libvndksupport.so` declared in AndroidManifest inside `<application>`?
+  2. Does LiteRtLmPlugin have GPU→CPU fallback? (GPU alone fails on many devices)
+  3. Is the model file the correct size? (E2B should be ~2.6 GB, not a few MB error page)
+  4. Does the device have enough RAM? (8 GB for E2B, 12 GB for E4B)
+  5. Run `adb logcat | grep LiteRtLm` for detailed native logs
+- **"No response generated after 0s"**: The Dart backend tried to stream before init completed. Ensure `litertlm_backend.dart` catches init errors and returns early instead of attempting inference.
+- **"No response generated after 17s"**: Engine initialized but produced no output. Likely a model file issue — delete and re-download the model.
+- **Crash on older devices**: Requires Android 12+ (API 31). The minSdk=31 bump handles this at install time.
+- **Out of memory / sudden app kill**: E2B needs 8 GB device RAM, E4B needs 12 GB. Android will kill the app if it exceeds available memory. Check RAM before allowing download.
+- **Very slow inference**: If CPU fallback kicked in (check logcat for "GPU failed, falling back to CPU"), inference will be 3-5x slower than GPU. This is expected — show users a "Running on CPU (slower)" indicator.
+- **Silent failures**: Always surface platform channel errors to the UI. The original code silently showed "no response" for init failures — this was fixed by wrapping the `invokeMethod('initialize')` call in try/catch and forwarding the error to the stream controller.
 
 ## Adding More Backends Later
 
