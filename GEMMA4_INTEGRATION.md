@@ -216,7 +216,134 @@ _inferenceEngine.generateResponse(
 | iOS 17+ | Not yet (Swift API in development, Gemma 4 not in iOS allowlist) |
 | Desktop (Linux/macOS/Windows) | Via Python/C++ API (not via this Flutter integration) |
 
-## Troubleshooting
+## Build Issues & Fixes (CRITICAL — read before building)
+
+These are real issues hit during the first successful build (2026-04-04). AppForge agents MUST apply these fixes or the build will fail.
+
+### Issue 1: Flutter SDK version too old
+
+**Error:**
+```
+Because pocketai depends on fllama from git which requires SDK version >=3.10.0 <4.0.0, version solving failed.
+```
+
+**Cause:** fllama's latest `main` branch requires Dart 3.10+ / Flutter 3.41+. Older Flutter (e.g. 3.29) will fail at dependency resolution.
+
+**Fix:** Run `flutter upgrade` before building. Minimum required: **Flutter 3.41.6 / Dart 3.11.4**.
+
+---
+
+### Issue 2: fllama linker error — `cpp-httplib` not found
+
+**Error:**
+```
+ld.lld: error: unable to find library -lcpp-httplib
+clang++: error: linker command failed with exit code 1
+```
+
+**Cause:** The latest llama.cpp `common/CMakeLists.txt` (bundled inside fllama) unconditionally links `cpp-httplib` at line 114. This library doesn't exist on Android. fllama's own `src/CMakeLists.txt` sets `LLAMA_HTTPLIB=OFF` but the `common` subdirectory ignores that flag.
+
+**Fix:** Patch the file at:
+```
+~/.pub-cache/git/fllama-<hash>/src/llama.cpp/common/CMakeLists.txt
+```
+
+Replace:
+```cmake
+target_link_libraries(${TARGET} PRIVATE
+    build_info
+    cpp-httplib
+)
+```
+
+With:
+```cmake
+target_link_libraries(${TARGET} PRIVATE
+    build_info
+)
+
+if (NOT LLAMA_HTTPLIB STREQUAL "OFF" AND NOT LLAMA_HTTPLIB STREQUAL "off")
+    target_link_libraries(${TARGET} PRIVATE cpp-httplib)
+endif()
+```
+
+Then clean the build cache:
+```bash
+rm -rf ~/.pub-cache/git/fllama-<hash>/android/.cxx
+rm -rf <project>/build/fllama
+```
+
+**Note:** This patch is in the pub cache, so `flutter pub get` or `flutter clean` may reset it. If the build fails again with this error, re-apply the patch. A permanent fix would be to fork fllama or pin to a commit that fixes this upstream.
+
+---
+
+### Issue 3: Kotlin type mismatch in LiteRtLmPlugin — Float vs Double
+
+**Error:**
+```
+e: LiteRtLmPlugin.kt:128:36 Argument type mismatch: actual type is 'Float', but 'Double' was expected.
+e: LiteRtLmPlugin.kt:129:43 Argument type mismatch: actual type is 'Float', but 'Double' was expected.
+```
+
+**Cause:** LiteRT-LM's `SamplerConfig` expects `Double` for `topP` and `temperature`, not `Float`. Using `.toFloat()` causes a compile error.
+
+**Fix:** In `LiteRtLmPlugin.kt`, use the values directly without `.toFloat()`:
+```kotlin
+// WRONG:
+topP = topP.toFloat(),
+temperature = temperature.toFloat()
+
+// CORRECT:
+topP = topP,
+temperature = temperature
+```
+
+**Already fixed** in the current codebase (commit 8c252aa).
+
+---
+
+### Issue 4: Kotlin metadata version warning (non-fatal)
+
+**Warning:**
+```
+Info: Class com.google.ai.edge.litertlm.LiteRtLmJni has malformed kotlin.Metadata:
+java.lang.IllegalArgumentException: Provided Metadata instance has version 2.3.0,
+while maximum supported version is 2.2.0.
+```
+
+**Cause:** The `litertlm-android` library was compiled with a newer Kotlin version (2.3.0) than the project's Kotlin compiler supports (2.2.0). This is a metadata compatibility warning, not an error.
+
+**Impact:** No runtime impact — the APK works fine. To suppress, upgrade the project's Kotlin version in `android/settings.gradle.kts` or `build.gradle.kts` when a compatible version is available.
+
+---
+
+### Issue 5: First build takes ~12 minutes
+
+**Cause:** fllama compiles llama.cpp from C++ source via CMake for 3 Android ABIs (`arm64-v8a`, `x86_64`, `x86`). This is ~200 compilation units per ABI.
+
+**Impact:** First build: ~12 min. Subsequent builds (Dart/Kotlin only): ~2-3 min.
+
+**Tip:** Don't kill the build if it appears stuck at `Running Gradle task 'assembleRelease'...` — it's compiling C++ in the background. The output doesn't stream until completion.
+
+---
+
+### Build Environment (tested & working)
+
+| Component | Version |
+|-----------|---------|
+| Flutter | 3.41.6 (stable) |
+| Dart | 3.11.4 |
+| Android SDK | compileSdk from flutter |
+| Android NDK | 28.2.13676358 (auto-installed) |
+| minSdk | 31 (Android 12+) |
+| Kotlin | 2.1.x (via Flutter Gradle plugin) |
+| CMake | 3.22.1 |
+| Build time | ~12 min first build, ~2-3 min incremental |
+| APK size | 114.2 MB (includes llama.cpp native libs for 3 ABIs) |
+
+---
+
+## Troubleshooting (Runtime)
 
 - **"Engine not initialized"**: The LiteRT-LM engine takes 10-15 seconds to load. Ensure you show a loading indicator.
 - **Crash on older devices**: Requires Android 12+ (API 31). The minSdk bump handles this at install time.
