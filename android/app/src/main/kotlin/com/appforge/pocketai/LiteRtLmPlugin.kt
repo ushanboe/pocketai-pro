@@ -125,8 +125,8 @@ class LiteRtLmPlugin private constructor(
                     val conv = engine!!.createConversation(ConversationConfig(
                         samplerConfig = SamplerConfig(
                             topK = topK,
-                            topP = topP.toFloat(),
-                            temperature = temperature.toFloat()
+                            topP = topP,
+                            temperature = temperature
                         )
                     ))
                     conversation = conv
