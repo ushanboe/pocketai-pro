@@ -6,6 +6,9 @@
         android:label="MyTinyAI"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- GPU acceleration for LiteRT-LM (Gemma 4). Optional — falls back to CPU if unavailable. -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false"/>
+        <uses-native-library android:name="libvndksupport.so" android:required="false"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"

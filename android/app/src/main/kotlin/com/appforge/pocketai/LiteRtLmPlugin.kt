@@ -61,24 +61,52 @@ class LiteRtLmPlugin private constructor(
                     try {
                         // Dispose previous engine if any
                         conversation = null
-                        engine?.close()
+                        try { engine?.close() } catch (_: Exception) {}
+                        engine = null
 
-                        val backend = if (backendStr == "cpu") Backend.CPU() else Backend.GPU()
+                        // Try GPU first, fall back to CPU if GPU fails
+                        val useGpu = backendStr != "cpu"
+                        var initError: Exception? = null
 
-                        engine = Engine(EngineConfig(
-                            modelPath = modelPath,
-                            backend = backend,
-                            visionBackend = backend,
-                            audioBackend = Backend.CPU()
-                        ))
-                        engine!!.initialize()
+                        if (useGpu) {
+                            try {
+                                android.util.Log.d("LiteRtLm", "Attempting GPU init for: $modelPath")
+                                engine = Engine(EngineConfig(
+                                    modelPath = modelPath,
+                                    backend = Backend.GPU(),
+                                    visionBackend = Backend.GPU(),
+                                    audioBackend = Backend.CPU()
+                                ))
+                                engine!!.initialize()
+                                android.util.Log.d("LiteRtLm", "GPU init succeeded")
+                            } catch (gpuErr: Exception) {
+                                android.util.Log.w("LiteRtLm", "GPU init failed, falling back to CPU: ${gpuErr.message}")
+                                try { engine?.close() } catch (_: Exception) {}
+                                engine = null
+                                initError = gpuErr
+                            }
+                        }
+
+                        // CPU fallback (or explicit CPU request)
+                        if (engine == null) {
+                            android.util.Log.d("LiteRtLm", "Attempting CPU init for: $modelPath")
+                            engine = Engine(EngineConfig(
+                                modelPath = modelPath,
+                                backend = Backend.CPU(),
+                                visionBackend = Backend.CPU(),
+                                audioBackend = Backend.CPU()
+                            ))
+                            engine!!.initialize()
+                            android.util.Log.d("LiteRtLm", "CPU init succeeded")
+                        }
 
                         withContext(Dispatchers.Main) {
                             result.success(true)
                         }
                     } catch (e: Exception) {
+                        android.util.Log.e("LiteRtLm", "Engine init failed completely: ${e.message}", e)
                         withContext(Dispatchers.Main) {
-                            result.error("INIT_FAILED", e.message, null)
+                            result.error("INIT_FAILED", "Engine init failed: ${e.message}", e.stackTraceToString())
                         }
                     }
                 }
@@ -101,8 +129,9 @@ class LiteRtLmPlugin private constructor(
 
     inner class StreamHandler : EventChannel.StreamHandler {
         override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-            if (events == null || engine == null) {
-                events?.error("NO_ENGINE", "Engine not initialized", null)
+            if (events == null) return
+            if (engine == null) {
+                events.error("NO_ENGINE", "Engine not initialized. Call initialize() first, or the model file may be corrupted/incompatible.", null)
                 return
             }
 

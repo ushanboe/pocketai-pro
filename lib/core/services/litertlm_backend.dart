@@ -65,13 +65,22 @@ class LiteRtLmBackend implements InferenceBackend {
       // Initialize engine if model changed or first run
       if (!_isInitialized || _currentModelPath != modelPath) {
         print('[LiteRtLmBackend] Initializing engine for: $modelPath');
-        await _method.invokeMethod('initialize', {
-          'modelPath': modelPath,
-          'backend': 'gpu', // GPU with CPU fallback
-        });
-        _isInitialized = true;
-        _currentModelPath = modelPath;
-        print('[LiteRtLmBackend] Engine initialized');
+        try {
+          await _method.invokeMethod('initialize', {
+            'modelPath': modelPath,
+            'backend': 'gpu', // GPU first, auto-fallback to CPU in Kotlin
+          });
+          _isInitialized = true;
+          _currentModelPath = modelPath;
+          print('[LiteRtLmBackend] Engine initialized successfully');
+        } catch (e) {
+          print('[LiteRtLmBackend] Engine init FAILED: $e');
+          _isInitialized = false;
+          _currentModelPath = null;
+          _streamController?.addError('Gemma 4 engine failed to start: $e\n\nThis may mean your device does not support LiteRT-LM, or the model file is corrupted. Try re-downloading the model.');
+          _streamController?.close();
+          return;
+        }
       }
 
       // Build the message list for the conversation
