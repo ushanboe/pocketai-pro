@@ -1,5 +1,7 @@
 # Gemma 4 LiteRT-LM Integration Guide
 
+**Status: WORKING** — Tested and confirmed on-device 2026-04-04. Gemma 4 E2B runs fast on Android with GPU acceleration.
+
 Step-by-step guide for adding Gemma 4 on-device inference to a Flutter app that currently uses fllama (llama.cpp) for GGUF models.
 
 ## Overview
@@ -24,7 +26,7 @@ Gemma 4 uses Google's **LiteRT-LM** runtime with `.litertlm` model files — a c
 
 ## Files Changed / Added
 
-### Modified (5 files)
+### Modified (6 files)
 | File | What changed |
 |------|-------------|
 | `lib/core/models/model_info.dart` | Added `InferenceBackendType` enum + `backendType` field |
@@ -32,6 +34,7 @@ Gemma 4 uses Google's **LiteRT-LM** runtime with `.litertlm` model files — a c
 | `lib/features/chat/screens/chat_screen.dart` | Passes `backendType` to InferenceEngine |
 | `android/app/build.gradle.kts` | Added LiteRT-LM dependency, minSdk=31 |
 | `android/app/src/main/AndroidManifest.xml` | Added GPU native library declarations (`libOpenCL.so`, `libvndksupport.so`) inside `<application>` |
+| `android/app/proguard-rules.pro` | Added `-keep` rules for all LiteRT-LM classes (prevents R8 stripping) |
 
 ### New (5 files)
 | File | Purpose |
@@ -40,7 +43,7 @@ Gemma 4 uses Google's **LiteRT-LM** runtime with `.litertlm` model files — a c
 | `lib/core/services/fllama_backend.dart` | Existing fllama logic extracted into backend interface |
 | `lib/core/services/litertlm_backend.dart` | Dart side — calls Kotlin via MethodChannel/EventChannel, with init error handling |
 | `lib/core/services/inference_engine.dart` | Rewritten as router that delegates to correct backend |
-| `android/.../LiteRtLmPlugin.kt` | Kotlin bridge to LiteRT-LM SDK with GPU→CPU fallback + logging |
+| `android/.../LiteRtLmPlugin.kt` | Kotlin bridge to LiteRT-LM SDK — callback-based streaming, GPU→CPU fallback, logging |
 
 ### Also modified
 - `MainActivity.kt` — added one line to register LiteRtLmPlugin
@@ -133,24 +136,53 @@ Copy `LiteRtLmPlugin.kt` into your `android/app/src/main/kotlin/<package>/` dire
 2. Channel name constants (`METHOD_CHANNEL`, `EVENT_CHANNEL`)
 
 The plugin handles:
-- Engine lifecycle (init, dispose)
+- Engine lifecycle (init with `cacheDir`, dispose with proper cleanup)
 - **GPU→CPU automatic fallback** (tries GPU first, retries with CPU if GPU fails)
-- Streaming via Kotlin coroutines + `sendMessageAsync().collect()`
+- **Callback-based streaming** via `MessageCallback` (NOT Flow — see Issue #8)
+- System instruction via `ConversationConfig.systemInstruction`
 - Image bytes for multimodal queries
 - Detailed Android logging (`adb logcat | grep LiteRtLm`)
+- Cancellation via `conversation.cancelProcess()`
 
 **CRITICAL: GPU fallback pattern.** The `initialize` method MUST try GPU first, then fall back to CPU:
 ```kotlin
 try {
-    engine = Engine(EngineConfig(modelPath = path, backend = Backend.GPU(), ...))
-    engine!!.initialize()
+    engine = Engine(EngineConfig(
+        modelPath = path, backend = Backend.GPU(),
+        visionBackend = Backend.GPU(), audioBackend = Backend.CPU(),
+        cacheDir = context.cacheDir.path,
+    ))
+    engine!!.initialize()  // BLOCKING call — run on background thread
 } catch (gpuErr: Exception) {
     Log.w("LiteRtLm", "GPU failed, falling back to CPU: ${gpuErr.message}")
-    engine = Engine(EngineConfig(modelPath = path, backend = Backend.CPU(), ...))
+    engine = Engine(EngineConfig(
+        modelPath = path, backend = Backend.CPU(),
+        visionBackend = Backend.CPU(), audioBackend = Backend.CPU(),
+        cacheDir = context.cacheDir.path,
+    ))
     engine!!.initialize()
 }
 ```
-Without this, the engine will fail on devices where GPU compute isn't available (common on mid-range phones).
+
+**CRITICAL: Use callback-based streaming, NOT Flow.** The `sendMessageAsync` API streams `Message` objects (not Strings). Using the callback pattern avoids casting issues:
+```kotlin
+conv.sendMessageAsync(
+    contents,
+    object : MessageCallback {
+        override fun onMessage(message: Message) {
+            val text = message.toString()  // Extract text from Message object
+            val thinking = message.channels?.get("thought")  // Optional thinking content
+            handler.post { events.success(text) }
+        }
+        override fun onDone() {
+            handler.post { events.success("__DONE__"); events.endOfStream() }
+        }
+        override fun onError(throwable: Throwable) {
+            handler.post { events.error("INFERENCE_ERROR", throwable.message, null) }
+        }
+    },
+)
+```
 
 ### Step 7: Register plugin in MainActivity
 
@@ -189,6 +221,18 @@ dependencies {
 ```
 
 These are REQUIRED for GPU inference. Without them, the engine init will fail with `INIT_FAILED` on most devices.
+
+**proguard-rules.pro** — Add keep rules to prevent R8 from stripping LiteRT-LM classes:
+```proguard
+# LiteRT-LM (Gemma 4) — keep all SDK classes, JNI, and callbacks
+# Without these rules, R8 strips classes that are only called from native/JNI code,
+# causing ClassNotFoundException crashes at runtime during inference.
+-keep class com.google.ai.edge.litertlm.** { *; }
+-keepclassmembers class com.google.ai.edge.litertlm.** { *; }
+-dontwarn com.google.ai.edge.litertlm.**
+```
+
+This is REQUIRED. Without it, the app compiles fine but crashes at runtime because R8 strips SDK classes that are only referenced via JNI from the native `.so` library.
 
 ### Step 9: Add Gemma 4 models to your catalog
 
@@ -427,23 +471,96 @@ Without this, init failure is silent and the user sees a confusing "no response 
 
 **Cause:** fllama compiles llama.cpp from C++ source via CMake for 3 Android ABIs (`arm64-v8a`, `x86_64`, `x86`). This is ~200 compilation units per ABI.
 
-**Impact:** First build: ~12 min. Subsequent builds (Dart/Kotlin only): ~2-3 min.
+**Impact:** First build: ~12 min. Subsequent builds (Dart/Kotlin only): ~1-2 min.
 
 **Tip:** Don't kill the build if it appears stuck at `Running Gradle task 'assembleRelease'...` — it's compiling C++ in the background. The output doesn't stream until completion.
 
 ---
 
+### Issue 8: App crashes (force close) during inference — wrong streaming API
+
+**Symptom:** App opens, model downloads, engine initializes, user sends a message, AI "thinks" briefly, then the app force closes. No error shown — just a crash.
+
+**Cause:** `sendMessageAsync()` returns `Flow<Message>`, NOT `Flow<String>`. The original code used:
+```kotlin
+// WRONG — causes native crash:
+conv.sendMessageAsync(contents).collect { token ->
+    events.success(token)  // token is a Message object, not a String!
+}
+```
+
+Passing a `Message` object through Flutter's `EventChannel` (which expects primitives) causes a native serialization crash.
+
+**Fix:** Use the **callback-based** `sendMessageAsync` with `MessageCallback` (this is the pattern Google's own AI Edge Gallery app uses):
+```kotlin
+// CORRECT — callback pattern with message.toString():
+conv.sendMessageAsync(
+    contents,
+    object : MessageCallback {
+        override fun onMessage(message: Message) {
+            val text = message.toString()  // Extract String from Message
+            val thinking = message.channels?.get("thought")
+            handler.post { events.success(text) }  // Send String through EventChannel
+        }
+        override fun onDone() {
+            handler.post { events.success("__DONE__"); events.endOfStream() }
+        }
+        override fun onError(throwable: Throwable) {
+            handler.post { events.error("INFERENCE_ERROR", throwable.message, null) }
+        }
+    },
+)
+```
+
+**Key API facts verified from LiteRT-LM source code:**
+- `engine.initialize()` is BLOCKING (not suspend) — run on background thread
+- `sendMessageAsync` streams `Message` objects — use `message.toString()` for text
+- `message.channels?.get("thought")` for thinking/reasoning content
+- `conversation.cancelProcess()` to abort (not coroutine job cancellation)
+- `Contents.of("text")` for simple text, `Contents.of(listOf(Content.ImageBytes(), Content.Text()))` for multimodal
+- System prompt goes in `ConversationConfig.systemInstruction`, not in the message list
+- Include `cacheDir = context.cacheDir.path` in `EngineConfig` for model caching
+
+**Already fixed** in the current codebase (commit e021c88).
+
+---
+
+### Issue 9: R8/ProGuard strips LiteRT-LM classes — runtime ClassNotFoundException
+
+**Symptom:** APK builds successfully but crashes at runtime when trying to use Gemma 4. Logcat shows `ClassNotFoundException` or `NoSuchMethodError` for LiteRT-LM classes.
+
+**Cause:** R8 (Android's code shrinker) strips classes that appear unused at compile time. LiteRT-LM's SDK classes are called from native JNI code (`liblitertlm_jni.so`), which R8 can't analyze — so it strips them.
+
+**Fix:** Add keep rules in `android/app/proguard-rules.pro`:
+```proguard
+-keep class com.google.ai.edge.litertlm.** { *; }
+-keepclassmembers class com.google.ai.edge.litertlm.** { *; }
+-dontwarn com.google.ai.edge.litertlm.**
+```
+
+**Already fixed** in the current codebase (commit 1dbd8ea).
+
+---
+
+### Issue 10: First build takes ~12 minutes
+
+(Same as Issue 7 — renumbered for clarity in the summary table.)
+
+---
+
 ### Summary of all issues
 
-| # | Error | Type | Severity |
-|---|-------|------|----------|
-| 1 | Flutter SDK version solving failed | Build | Fatal — won't compile |
-| 2 | `cpp-httplib` linker error | Build | Fatal — needs pub cache patch |
-| 3 | Kotlin Float vs Double | Build | Fatal — compile error (fixed in code) |
-| 4 | Kotlin metadata version warning | Build | Non-fatal warning |
-| 5 | `uses-native-library` wrong XML location | Build | Fatal — AAPT error (fixed in code) |
-| 6 | `INIT_FAILED, Engine is not initialized` | Runtime | Fatal — needs manifest + GPU fallback |
-| 7 | First build takes ~12 minutes | Build | Expected behavior |
+| # | Error | Type | Severity | Status |
+|---|-------|------|----------|--------|
+| 1 | Flutter SDK version solving failed | Build | Fatal — won't compile | Fix: `flutter upgrade` |
+| 2 | `cpp-httplib` linker error | Build | Fatal — needs pub cache patch | Fix: patch CMakeLists.txt |
+| 3 | Kotlin Float vs Double | Build | Fatal — compile error | Fixed in code |
+| 4 | Kotlin metadata version warning | Build | Non-fatal warning | Ignore |
+| 5 | `uses-native-library` wrong XML location | Build | Fatal — AAPT error | Fixed in code |
+| 6 | `INIT_FAILED, Engine is not initialized` | Runtime | Fatal — no GPU access | Fixed: manifest + fallback |
+| 7 | App crashes during inference | Runtime | Fatal — wrong API | Fixed: MessageCallback pattern |
+| 8 | R8 strips LiteRT-LM classes | Runtime | Fatal — ClassNotFound | Fixed: ProGuard keep rules |
+| 9 | First build takes ~12 minutes | Build | Expected behavior | Normal |
 
 ### Build Environment (tested & working)
 
@@ -464,7 +581,9 @@ Without this, init failure is silent and the user sees a confusing "no response 
 
 ## Troubleshooting (Runtime)
 
-- **`PlatformException(INIT_FAILED, Engine is not initialized)`**: Most common error. Check in this order:
+- **App force closes / crashes during inference**: Almost certainly Issue #7 (wrong streaming API). `sendMessageAsync` returns `Flow<Message>`, not `Flow<String>`. You MUST use the callback-based pattern with `MessageCallback` and call `message.toString()` to extract text. See Issue #7 above for the exact fix.
+- **`ClassNotFoundException` or `NoSuchMethodError` at runtime**: R8 stripped LiteRT-LM classes. Add ProGuard keep rules (Issue #8).
+- **`PlatformException(INIT_FAILED, Engine is not initialized)`**: Second most common error. Check in this order:
   1. Are `libOpenCL.so` + `libvndksupport.so` declared in AndroidManifest inside `<application>`?
   2. Does LiteRtLmPlugin have GPU→CPU fallback? (GPU alone fails on many devices)
   3. Is the model file the correct size? (E2B should be ~2.6 GB, not a few MB error page)

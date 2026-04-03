@@ -137,16 +137,19 @@ The following issues WILL occur on first build. See [GEMMA4_INTEGRATION.md](GEMM
 |---|-------|------|-----|
 | 1 | `version solving failed` (SDK >=3.10.0) | Build | `flutter upgrade` to 3.41+ |
 | 2 | `ld.lld: error: unable to find library -lcpp-httplib` | Build | Patch `~/.pub-cache/git/fllama-<hash>/src/llama.cpp/common/CMakeLists.txt` — make httplib conditional |
-| 3 | `Argument type mismatch: Float vs Double` in LiteRtLmPlugin.kt | Build | Fixed in code — don't use `.toFloat()` on SamplerConfig params |
+| 3 | `Argument type mismatch: Float vs Double` | Build | Fixed in code — don't use `.toFloat()` on SamplerConfig params |
 | 4 | Kotlin metadata version warning (2.3.0 vs 2.2.0) | Build | Non-fatal, no runtime impact |
 | 5 | `uses-native-library` found in `<manifest>` | Build | Must go INSIDE `<application>`, not under `<manifest>` — fixed in code |
-| 6 | `INIT_FAILED, Engine is not initialized` | Runtime | Add `libOpenCL.so` + `libvndksupport.so` to manifest + GPU→CPU fallback in plugin |
-| 7 | Build appears stuck for 10+ minutes | Build | Normal — llama.cpp C++ compilation for 3 ABIs, ~12 min first build |
+| 6 | `INIT_FAILED, Engine is not initialized` | Runtime | Add `libOpenCL.so` + `libvndksupport.so` to manifest + GPU→CPU fallback |
+| 7 | App force closes during inference | Runtime | `sendMessageAsync` returns `Message` not `String` — must use `MessageCallback` pattern with `message.toString()` |
+| 8 | R8 strips LiteRT-LM classes | Runtime | Add `-keep class com.google.ai.edge.litertlm.** { *; }` to proguard-rules.pro |
+| 9 | Build appears stuck for 10+ minutes | Build | Normal — llama.cpp C++ compilation for 3 ABIs, ~12 min first build |
 
 **Notes:**
 - Issue #2 (httplib patch) is in the pub cache and may need to be re-applied after `flutter pub get` or `flutter clean`
-- Issue #6 is the most common runtime failure — always include the manifest GPU libs AND the GPU→CPU fallback
-- See [GEMMA4_INTEGRATION.md](GEMMA4_INTEGRATION.md#build-issues--fixes-critical--read-before-building) for full details with error messages, causes, and code fixes
+- Issues #7 and #8 are the most critical runtime failures — the app builds fine but crashes on device
+- Issue #7 (wrong streaming API) was the hardest to diagnose — no error message, just a force close
+- All issues are fixed in the current codebase. See [GEMMA4_INTEGRATION.md](GEMMA4_INTEGRATION.md#build-issues--fixes-critical--read-before-building) for full details
 
 ## Permissions
 
