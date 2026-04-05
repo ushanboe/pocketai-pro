@@ -1,6 +1,6 @@
 # Gemma 4 LiteRT-LM Integration Guide
 
-**Status: WORKING** — Tested and confirmed on-device 2026-04-04. Gemma 4 E2B runs fast on Android with GPU acceleration.
+**Status: WORKING IN PRODUCTION** — Confirmed working on Samsung phone 2026-04-04. Gemma 4 E2B runs on-device with GPU acceleration. Successfully identifies plants (Coconut Palm 95%, Calathea/Prayer Plant) with multimodal vision. First app built by Tateru with real on-device AI.
 
 Step-by-step guide for adding Gemma 4 on-device inference to a Flutter app that currently uses fllama (llama.cpp) for GGUF models.
 
@@ -542,7 +542,38 @@ conv.sendMessageAsync(
 
 ---
 
-### Issue 10: First build takes ~12 minutes
+### Issue 10: Native crash at nativeCreateConversation when using suspendCancellableCoroutine
+
+**Symptom:** App crashes or method call hangs forever when using `suspendCancellableCoroutine` to wrap the `sendMessageAsync` callback.
+
+**Cause:** `suspendCancellableCoroutine` runs the callback setup on the coroutine thread. If `sendMessageAsync` delivers `MessageCallback` events on a different native thread, the continuation can be resumed after the coroutine scope is cancelled, causing a native crash at `nativeCreateConversation` or a hung Future that never completes.
+
+**Fix:** Do NOT use `suspendCancellableCoroutine`. Instead, pass `MethodChannel.Result` directly into the inference method and call `result.success()` from the `onDone` callback via a main thread handler:
+
+```kotlin
+private fun runInference(prompt: String, ..., result: MethodChannel.Result) {
+    try { conversation?.close() } catch (_: Exception) {}
+    val conv = engine!!.createConversation(...)
+    conversation = conv  // Track as class field!
+    val buffer = StringBuilder()
+    conv.sendMessageAsync(contents, object : MessageCallback {
+        override fun onMessage(message: Message) { buffer.append(message.toString()) }
+        override fun onDone() { handler.post { result.success(buffer.toString()) } }
+        override fun onError(t: Throwable) { handler.post { result.error(...) } }
+    })
+}
+```
+
+**Key points:**
+- Track `conversation` as a class field and close previous before creating new
+- Use `handler.post { result.success(...) }` for main thread safety
+- Never use `suspendCancellableCoroutine` with LiteRT-LM callbacks
+
+**Already fixed** in verdant-pro LiteRtLmPlugin.kt (2026-04-04).
+
+---
+
+### Issue 11: First build takes ~12 minutes
 
 (Same as Issue 7 — renumbered for clarity in the summary table.)
 
@@ -561,6 +592,7 @@ conv.sendMessageAsync(
 | 7 | App crashes during inference | Runtime | Fatal — wrong API | Fixed: MessageCallback pattern |
 | 8 | R8 strips LiteRT-LM classes | Runtime | Fatal — ClassNotFound | Fixed: ProGuard keep rules |
 | 9 | First build takes ~12 minutes | Build | Expected behavior | Normal |
+| 10 | Native crash at nativeCreateConversation | Runtime | Fatal — hung Future | Fixed: no suspendCancellableCoroutine, track conversation as field |
 
 ### Build Environment (tested & working)
 
@@ -595,6 +627,33 @@ conv.sendMessageAsync(
 - **Out of memory / sudden app kill**: E2B needs 8 GB device RAM, E4B needs 12 GB. Android will kill the app if it exceeds available memory. Check RAM before allowing download.
 - **Very slow inference**: If CPU fallback kicked in (check logcat for "GPU failed, falling back to CPU"), inference will be 3-5x slower than GPU. This is expected — show users a "Running on CPU (slower)" indicator.
 - **Silent failures**: Always surface platform channel errors to the UI. The original code silently showed "no response" for init failures — this was fixed by wrapping the `invokeMethod('initialize')` call in try/catch and forwarding the error to the stream controller.
+
+## Hybrid AI Architecture (RECOMMENDED)
+
+Pure on-device AI is NOT the best approach for vision-heavy apps. The proven pattern from Love Plants (2026-04-05):
+
+### Architecture
+| Task | Provider | Why |
+|------|----------|-----|
+| Photo identification / vision | Cloud (Sonnet 4.6 / GPT-4o / Gemini Flash) | Accuracy critical, E2B vision is poor |
+| Content generation (care guides, reports) | Cloud (at save time, before navigation) | Reliability, avoids OOM |
+| Chat / Q&A / corrections | On-device Gemma 4 E2B | Free, offline, text quality is fine |
+| Voice commands | On-device Gemma 4 E2B | Low latency, offline |
+
+### Key Rules
+1. **E4B is TOO HEAVY** — 3.7GB model, 12GB RAM requirement causes OOM kills on most phones. Use E2B only.
+2. **E2B vision is poor** — misidentifies objects, low confidence. Use cloud for any vision task.
+3. **Haiku is too weak for vision** — always use Sonnet/GPT-4o/Gemini Flash for identification.
+4. **`_bestVisionModel()` pattern** — override user's chat model with strongest vision model per provider.
+5. **Generate content at save time** — NEVER auto-generate with Gemma on page load (OOM crash). NEVER fire-and-forget from a screen that navigates away (Future gets killed). Generate via cloud API during save, store in DB, display when ready.
+
+### Why Hybrid Beats Pure On-Device
+- Cloud vision is accurate; on-device vision is not (for identification tasks)
+- Cloud content generation is reliable; on-device crashes under memory pressure
+- On-device chat is free and offline; cloud chat costs add up quickly
+- Best of both worlds: accurate identification + free ongoing interaction
+
+---
 
 ## Adding More Backends Later
 
