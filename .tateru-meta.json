@@ -1,0 +1,35 @@
+{
+  "slug": "pocketai-pro",
+  "name": "MyTinyAI",
+  "tagline": "PocketAI Pro - On-device AI with multi-backend support (fllama + Gemma 4 LiteRT-LM)",
+  "tateru_built": true,
+  "tateru_version": null,
+  "build_date": "2026-04-03",
+  "platforms": [
+    "android"
+  ],
+  "tech_stack": [
+    "flutter",
+    "fllama",
+    "sqflite",
+    "provider",
+    "flutter_tts",
+    "speech_to_text",
+    "image_picker",
+    "lottie"
+  ],
+  "features": [
+    "17 LLM models: Qwen, Llama, Gemma, DeepSeek, Phi, SmolLM, Granite, TinyLlama, MiniCPM-V (0.5B\u20134.1B params)",
+    "2 vision models: MobileVLM V2 1.7B (light) and MobileVLM 3B (best quality): describe photos, read text in images, answer visual questions...",
+    "Optimised vision pipeline: Higher-quality image capture (768x768@90%), low temperature (0.3), boosted max tokens (1024) for detailed imag...",
+    "Hey Tiny voice mode: Continuous hands-free conversation: STT \u2192 inference \u2192 TTS \u2192 auto-listen loop with animated \"Thinking\" indicator"
+  ],
+  "on_device_ai": true,
+  "store_url": null,
+  "screenshots_dir": null,
+  "build_notes_files": [],
+  "blog_eligible": false,
+  "blog_notes": "PocketAI variant \u2014 likely public/pro release of the same flagship.",
+  "is_private_repo": false,
+  "github_created_at": "2026-04-03"
+}
